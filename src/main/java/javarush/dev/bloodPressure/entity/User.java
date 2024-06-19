@@ -14,11 +14,16 @@ public class User {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
     boolean isDoctor;
+    private String firstName;
+    private String lastName;
     private String username;
     private String password;
+    private String email;
+    private String confirmEmail;
     private String role;
+    private Integer age;
     private Long chatId;
-    @OneToMany
+    @OneToMany(fetch = FetchType.EAGER, cascade = CascadeType.ALL)
     private List<BloodPressureMeasurement> bloodPressureMeasurements;
     private String doctor; // Доктор, который обследует
     private String medication;
