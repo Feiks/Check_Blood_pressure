@@ -1,9 +1,6 @@
 package javarush.dev.bloodPressure.config;
 
 
-import com.assemblyai.api.AssemblyAI;
-import com.assemblyai.api.resources.transcripts.types.Transcript;
-
 import com.google.api.gax.core.FixedCredentialsProvider;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.speech.v1.*;
@@ -14,9 +11,6 @@ import javarush.dev.bloodPressure.repo.BloodMeasurementRepository;
 import javarush.dev.bloodPressure.repo.UserRepository;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import net.bramp.ffmpeg.FFmpeg;
-import net.bramp.ffmpeg.FFmpegExecutor;
-import net.bramp.ffmpeg.builder.FFmpegBuilder;
 import org.jfree.chart.ChartFactory;
 import org.jfree.chart.ChartUtils;
 import org.jfree.chart.JFreeChart;
@@ -32,6 +26,7 @@ import org.telegram.telegrambots.meta.api.methods.GetFile;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
+import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
 import org.telegram.telegrambots.meta.api.objects.InputFile;
 import org.telegram.telegrambots.meta.api.objects.Message;
 import org.telegram.telegrambots.meta.api.objects.Update;
@@ -70,6 +65,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private Map<Long, String> userTokens = new HashMap<>();
     private static final String FFMPEG_PATH = "C:\\Users\\fbekeshov.DC\\Downloads\\ffmpeg-master-latest-win64-gpl\\ffmpeg-master-latest-win64-gpl\\bin";
     int counter = 1;
+    private Map<Long, String> pendingBloodPressure = new HashMap<>();
 
 
     public TelegramBot(BotConfig botConfig, UserRepository userRepository, BloodMeasurementRepository bloodMeasurementRepository) {
@@ -112,8 +108,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 if ("start_health_checking".equals(callbackData)) {
                     System.out.println("dsadsad");
                 }
-            }
-          else {
+            } else {
                 if (userStates.containsKey(chatId) && "AWAITING_PRESSURE".equals(userStates.get(chatId))) {
                     handleHealthCheckInput(chatId, message);
                 } else {
@@ -146,17 +141,51 @@ public class TelegramBot extends TelegramLongPollingBot {
                     }
                 }
             }
+        } else if (update.hasMessage() && update.getMessage().hasVoice()) {
+            long chatId = update.getMessage().getChatId();
+            handleAudioMessage(update.getMessage(),chatId);
         }
-        else if (update.hasMessage() && update.getMessage().hasVoice()) {
-            handleAudioMessage(update.getMessage());
+        else if (update.hasCallbackQuery()) {
+                CallbackQuery callbackQuery = update.getCallbackQuery();
+                long chatId = callbackQuery.getMessage().getChatId();
+                String data = callbackQuery.getData();
+                if ("try_again".equals(data)) {
+                    sendMessageAnswer(update.getCallbackQuery().getMessage().getChatId(), "Please send an audio message with your blood pressure measurement.");
+                } else if ("yes".equals(data)) {
+                    String bloodPressure = pendingBloodPressure.get(chatId);
+                    saveBloodPressureMeasurement(chatId, bloodPressure);
+                    pendingBloodPressure.remove(chatId);
+                }
+            }
+        }
+
+    private void saveBloodPressureMeasurement(long chatId, String bloodPressure) {
+        Optional<User> user = userRepository.findByChatId(chatId);
+        bloodPressure= bloodPressure.replaceAll("by", " ");
+        String[] parts = bloodPressure.trim().split("\\s+");  // Use trim() to remove leading and trailing spaces
+        if (parts.length == 2) {
+            BloodPressureMeasurement bloodPressureMeasurement = new BloodPressureMeasurement();
+            bloodPressureMeasurement.setMeasurementTime(LocalDateTime.now());
+            String systolic = parts[0];
+            String diastolic = parts[1];
+            // Now you can save these values to your bloodPressureMeasurement object or repository
+            bloodPressureMeasurement.setSystolic(Integer.parseInt(systolic));
+            bloodPressureMeasurement.setDiastolic(Integer.parseInt(diastolic));
+            user.get().getBloodPressureMeasurements().add(bloodPressureMeasurement);
+            userRepository.save(user.get());
+            sendMessageWithCommands(chatId, "Your blood pressure was successfully saved ");
+        } else {
+            sendMessageAnswer(chatId, "Could not recognise, please try again,Please send an audio message with your blood pressure measurement. (e.g 120 by 80)");
+
         }
 
     }
 
-    private void handleAudioMessage(Message message) throws IOException, InterruptedException {
+
+    private void handleAudioMessage(Message message, long chatId) throws IOException, InterruptedException {
         String fileId = message.getVoice().getFileId();
         String savePath = "C:\\Users\\fbekeshov.DC\\Downloads\\audio.ogg";
-        downloadAudioFile(fileId,savePath);
+        downloadAudioFile(fileId, savePath);
         String filePath = String.format("C:\\Users\\fbekeshov.DC\\Downloads\\boomaudio%d.mp3", counter);
         counter++;
         convertAudio(savePath, filePath);
@@ -181,12 +210,42 @@ public class TelegramBot extends TelegramLongPollingBot {
                 RecognitionAudio audio = RecognitionAudio.newBuilder().setContent(audioBytes).build();
 
                 RecognizeResponse response = speechClient.recognize(config, audio);
-                for (SpeechRecognitionResult result : response.getResultsList()) {
-                    System.out.println(result.getAlternatives(0).getTranscript());
+                String recognizedText = response.getResultsList().stream()
+                        .map(result -> result.getAlternatives(0).getTranscript())
+                        .findFirst()
+                        .orElse("");
+                if (!recognizedText.isEmpty()) {
+                    SendMessage message1 = new SendMessage();
+                    message1.setChatId(String.valueOf(chatId));
+                    String resultMessage = String.format("Did I recognize your blood pressure correctly as %s?", recognizedText);
+                    message1.setText(resultMessage);
+                    InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
+                    List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
+                    List<InlineKeyboardButton> rowInline = new ArrayList<>();
+                    InlineKeyboardButton inlineKeyboardButton1 = InlineKeyboardButton.builder()
+                            .text("Yes")
+                            .callbackData("yes")
+                            .build();
+                    InlineKeyboardButton inlineKeyboardButton2 = InlineKeyboardButton.builder()
+                            .text("Try Again")
+                            .callbackData("try_again")
+                            .build();
+
+                    rowInline.add(inlineKeyboardButton1);
+                    rowInline.add(inlineKeyboardButton2);
+                    rowsInline.add(rowInline);
+                    markupInline.setKeyboard(rowsInline);
+                    message1.setReplyMarkup(markupInline);
+
+                    sendMessage(message1);
+                    pendingBloodPressure.put(chatId, recognizedText);
+                } else {
+                    sendMessageAnswer(chatId, "Sorry, I couldn't recognize your blood pressure. Please try again.");
                 }
             }
         }
     }
+
     private static void convertAudio(String inputFilePath, String outputFilePath) throws IOException, InterruptedException {
         String ffmpegPath = "C:\\Users\\fbekeshov.DC\\Downloads\\ffmpeg-master-latest-win64-gpl\\ffmpeg-master-latest-win64-gpl\\bin\\ffmpeg.exe";
 
@@ -231,7 +290,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         return savePath;
     }
 
-        private void handleShowGraphicCommand(long chatId) {
+    private void handleShowGraphicCommand(long chatId) {
         Optional<User> user = userRepository.findByChatId(chatId);
 
         if (user.isPresent()) {
