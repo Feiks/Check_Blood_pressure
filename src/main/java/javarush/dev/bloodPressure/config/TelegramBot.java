@@ -117,9 +117,12 @@ public class TelegramBot extends TelegramLongPollingBot {
                             startCommandReceived(chatId, update.getMessage().getChat().getFirstName());
                             break;
                         case "Start Health Checking":
+                            log.info("/startHeadlthChecking is pressed with chatId {}", chatId);
                             startHealthChecking(chatId);
                             break;
                         case "/audioBloodPressure":
+                        case "Audio Blood Pressure":
+                            log.info("/audioBloodPressure is pressed with chatId {}", chatId);
                             sendMessageAnswer(update.getMessage().getChatId(), "Please send an audio message with your blood pressure measurement.");
                             break;
                         case "/register":
@@ -127,12 +130,15 @@ public class TelegramBot extends TelegramLongPollingBot {
                             startRegistration(chatId);
                             break;
                         case "Check your BMI":
+                            log.info("/checkBMI is pressed with chatId {}", chatId);
                             checkMyIBF(chatId);
                             break;
                         case "Show Graphic":
+                            log.info("/showGraphic is pressed with chatId {}", chatId);
                             handleShowGraphicCommand(chatId);
                             break;
                         case "My measurements":
+                            log.info("/mymeasurements is pressed with chatId {}", chatId);
                             getMyPastMeasurements(chatId);
                             break;
                         default:
@@ -150,9 +156,11 @@ public class TelegramBot extends TelegramLongPollingBot {
                 long chatId = callbackQuery.getMessage().getChatId();
                 String data = callbackQuery.getData();
                 if ("try_again".equals(data)) {
+                    log.info("try again  is pressed ");
                     sendMessageAnswer(update.getCallbackQuery().getMessage().getChatId(), "Please send an audio message with your blood pressure measurement.");
                 } else if ("yes".equals(data)) {
                     String bloodPressure = pendingBloodPressure.get(chatId);
+                    log.info("yes  is pressed ");
                     saveBloodPressureMeasurement(chatId, bloodPressure);
                     pendingBloodPressure.remove(chatId);
                 }
@@ -171,9 +179,13 @@ public class TelegramBot extends TelegramLongPollingBot {
             // Now you can save these values to your bloodPressureMeasurement object or repository
             bloodPressureMeasurement.setSystolic(Integer.parseInt(systolic));
             bloodPressureMeasurement.setDiastolic(Integer.parseInt(diastolic));
+            bloodPressureMeasurement.setUser(user.get());
             user.get().getBloodPressureMeasurements().add(bloodPressureMeasurement);
             userRepository.save(user.get());
-            sendMessageWithCommands(chatId, "Your blood pressure was successfully saved ");
+            log.info("bloodPressure is saved with chatId {}", chatId);
+            String result = "Your blood pressure was successfully saved . \nYour ";
+
+            sendMessageWithCommands(chatId,getBloodMeasurementsResults(bloodPressureMeasurement.getSystolic(), bloodPressureMeasurement.getDiastolic(), user.get(),result) );
         } else {
             sendMessageAnswer(chatId, "Could not recognise, please try again,Please send an audio message with your blood pressure measurement. (e.g 120 by 80)");
 
@@ -456,6 +468,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 bloodPressureMeasurement.setDiastolic(diastolic);
                 bloodPressureMeasurement.setSystolic(systolic);
                 bloodPressureMeasurement.setMeasurementTime(LocalDateTime.now());
+                bloodPressureMeasurement.setUser(userOptional.get());
 
                 userOptional.get().getBloodPressureMeasurements().add(bloodPressureMeasurement);
                 userRepository.save(userOptional.get());
@@ -476,12 +489,19 @@ public class TelegramBot extends TelegramLongPollingBot {
     private String getBloodMeasurementsResults(int systolic, int diastolic, User user, String resultMessage) {
 
         if (systolic < 90 || diastolic < 60) {
-            resultMessage += "Blood pressure is low.";
-        } else if (systolic <= 129 && diastolic <= 89) {
-            resultMessage += "Blood pressure is normal.";
-        } else {
-            resultMessage += "Blood pressure is high. You should take your pills " + user.getMedication();
+            resultMessage = "Blood pressure is low (Hypotension).";
+        } else if ((systolic >= 90 && systolic <= 120) && (diastolic >= 60 && diastolic <= 80)) {
+            resultMessage = "Blood pressure is normal.";
+        } else if ((systolic > 120 && systolic <= 129) &&( diastolic < 85) ){
+            resultMessage = "Blood pressure is elevated.";
+        } else if ((systolic >= 130 && systolic <= 139) || (diastolic >= 80 && diastolic <= 89) ){
+            resultMessage = "Blood pressure is high . You should take your medication: " + user.getMedication() + " , According to WHO standart you have (Hypertension Stage 1)";
+        } else if (systolic >= 140 || diastolic >= 90) {
+            resultMessage = "Blood pressure is very high . You should take your medication: " + user.getMedication() + " , According to WHO standart you have (Hypertension Stage 2)";
+        } else if (systolic > 180 || diastolic > 120) {
+            resultMessage = "Blood pressure is in hypertensive crisis. Seek emergency care immediately!";
         }
+
         return resultMessage;
     }
 
@@ -489,8 +509,10 @@ public class TelegramBot extends TelegramLongPollingBot {
         if (userTokens.containsKey(chatId)) {
             String token = userTokens.get(chatId);
             if (message.equals(token)) {
+                log.info("Authentication is successful  with chatId {}", chatId);
                 sendMessageAnswer(chatId, "Authentication successful!");
             } else {
+                log.info("Authentication is failed  with chatId {}", chatId);
                 sendMessageAnswer(chatId, "Authentication failed. Please try again.");
             }
             userTokens.remove(chatId);
@@ -501,6 +523,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     private void startRegistration(long chatId) {
         if (userRepository.findByChatId(chatId).isPresent()) {
+            log.info("User is already registered with chatId {}", chatId);
             sendMessageWithCommands(chatId, "You are already registered");
         }
         User user = new User();
@@ -510,6 +533,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void handlePendingUserRegistration(long chatId, String message, org.telegram.telegrambots.meta.api.objects.User from) {
+        log.info("User registration is started with chatId {}", chatId);
         User user = pendingUsers.get(chatId);
         if (user.getFirstName() == null) {
             user.setFirstName(message);
@@ -544,16 +568,17 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     private void startHealthChecking(long chatId) {
         if (isUserRegistered(chatId)) {
-            log.info("Yeha");
             sendMessageAnswer(chatId, "Please enter your Ciastolic and Diastolic pressure: (e.g - 120/80)");
             userStates.put(chatId, "AWAITING_PRESSURE");
         } else {
+            log.info("User isnot  registered with chatId {} to start HealthChecking", chatId);
             sendMessageAnswer(chatId, "Ooops! You need to register first. Please use the /register command.");
         }
     }
 
     private boolean isUserRegistered(long chatId) {
         Optional<User> user = userRepository.findByChatId(chatId);
+        log.info("User is registered with chatId {}", chatId);
         return user.isPresent();
     }
 
@@ -569,13 +594,16 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private void startCommandReceived(long chatId, String firstName) {
+        log.info("/start command is pressed with chatId {}", chatId);
         String botUsername = getBotUsername();
         String answer = "Hi, " + firstName + "! My name is " + botUsername + ".\n\n" +
                 "Here are the commands you can use:";
         sendMessageWithCommands(chatId, answer);
     }
 
-    private void sendMessageWithCommands(long chatId, String resultMessage) {
+    public void sendMessageWithCommands(long chatId, String resultMessage) {
+        log.info("sendMessageWithCommands is pressed with chatId {}", chatId);
+
         SendMessage message = new SendMessage();
         message.setChatId(String.valueOf(chatId));
         message.setText(resultMessage);
@@ -587,12 +615,14 @@ public class TelegramBot extends TelegramLongPollingBot {
         row.add(new KeyboardButton("Start Health Checking"));
         row.add(new KeyboardButton("My measurements"));
         keyboard.add(row);
+        row = new KeyboardRow();
+        row.add(new KeyboardButton("Check your BMI"));
+        keyboard.add(row);
 
         // Second row
         row = new KeyboardRow();
-        row.add(new KeyboardButton("Check your BMI"));
         row.add(new KeyboardButton("Show Graphic"));
-        row.add(new KeyboardButton("/audioBloodPressure"));
+        row.add(new KeyboardButton("Audio Blood Pressure"));
         keyboard.add(row);
 
         keyboardMarkup.setKeyboard(keyboard);
@@ -603,6 +633,8 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     public void sendMessage(SendMessage message) {
+        log.info("sendMessage is pressed with chatId {}", message.getChatId());
+
         try {
             execute(message);
         } catch (TelegramApiException e) {

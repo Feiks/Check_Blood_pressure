@@ -1,9 +1,6 @@
 package javarush.dev.bloodPressure.entity;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.GeneratedValue;
-import jakarta.persistence.GenerationType;
-import jakarta.persistence.Id;
+import jakarta.persistence.*;
 import lombok.Data;
 
 import java.time.LocalDateTime;
@@ -18,5 +15,7 @@ public class BloodPressureMeasurement {
     private int systolic; // Систолическое давление
     private int diastolic; // Диастолическое давление
     private LocalDateTime measurementTime; // Дата и время измерения
-
+    @ManyToOne
+    @JoinColumn(name = "user_id")
+    private User user;
 }
