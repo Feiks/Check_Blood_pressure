@@ -27,6 +27,7 @@ public class User {
     private List<BloodPressureMeasurement> bloodPressureMeasurements;
     private String doctor; // Доктор, который обследует
     private String medication;
+    private String medicineTime;
     @OneToMany
     List<User> patients;
 }
