@@ -5,6 +5,18 @@ import com.google.api.gax.core.FixedCredentialsProvider;
 import com.google.auth.oauth2.GoogleCredentials;
 import com.google.cloud.speech.v1.*;
 import com.google.protobuf.ByteString;
+import com.itextpdf.io.font.constants.StandardFonts;
+import com.itextpdf.kernel.colors.DeviceRgb;
+import com.itextpdf.kernel.font.PdfFont;
+import com.itextpdf.kernel.font.PdfFontFactory;
+import com.itextpdf.kernel.geom.PageSize;
+import com.itextpdf.kernel.pdf.PdfDocument;
+import com.itextpdf.kernel.pdf.PdfWriter;
+import com.itextpdf.layout.Document;
+import com.itextpdf.layout.element.Paragraph;
+import com.itextpdf.layout.element.Table;
+import com.itextpdf.layout.properties.TextAlignment;
+import com.itextpdf.layout.properties.VerticalAlignment;
 import javarush.dev.bloodPressure.entity.BloodPressureMeasurement;
 import javarush.dev.bloodPressure.entity.User;
 import javarush.dev.bloodPressure.repo.BloodMeasurementRepository;
@@ -24,6 +36,7 @@ import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.GetFile;
 import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
+import org.telegram.telegrambots.meta.api.methods.send.SendDocument;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.send.SendPhoto;
 import org.telegram.telegrambots.meta.api.objects.CallbackQuery;
@@ -38,6 +51,7 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKe
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
+import com.itextpdf.layout.element.Cell;
 
 import java.awt.*;
 import java.io.*;
@@ -66,6 +80,7 @@ public class TelegramBot extends TelegramLongPollingBot {
     private static final String FFMPEG_PATH = "C:\\Users\\fbekeshov.DC\\Downloads\\ffmpeg-master-latest-win64-gpl\\ffmpeg-master-latest-win64-gpl\\bin";
     int counter = 1;
     private Map<Long, String> pendingBloodPressure = new HashMap<>();
+    private Map<Long, LocalDateTime> pendingDate = new HashMap<>();
 
 
     public TelegramBot(BotConfig botConfig, UserRepository userRepository, BloodMeasurementRepository bloodMeasurementRepository) {
@@ -108,7 +123,32 @@ public class TelegramBot extends TelegramLongPollingBot {
                 if ("start_health_checking".equals(callbackData)) {
                     System.out.println("dsadsad");
                 }
-            } else {
+            }
+            else if (update.hasMessage() && update.getMessage().hasText() && userStates.containsKey(update.getMessage().getChatId()) && "AWAITING_START_DATE".equals(userStates.get(update.getMessage().getChatId()))) {
+                String startDateString = update.getMessage().getText();
+                LocalDateTime startDate = LocalDateTime.parse(startDateString + "T00:00:00");
+                sendMessageAnswer(update.getMessage().getChatId(), "Please enter the end date in the format yyyy-MM-dd:");
+                userStates.put(update.getMessage().getChatId(), "AWAITING_END_DATE");
+                pendingDate.put(update.getMessage().getChatId(), startDate);
+            } else if (update.hasMessage() && update.getMessage().hasText() && userStates.containsKey(update.getMessage().getChatId()) && "AWAITING_END_DATE".equals(userStates.get(update.getMessage().getChatId()))) {
+                String endDateString = update.getMessage().getText();
+                LocalDateTime endDate = LocalDateTime.parse(endDateString + "T23:59:59");
+                File pdfFile = generatePDF(update.getMessage().getChatId(), pendingDate.get(update.getMessage().getChatId()), endDate); // Assuming generatePDF returns the byte array of the PDF
+                SendDocument sendDocument = new SendDocument();
+                sendDocument.setChatId(String.valueOf(update.getMessage().getChatId()));
+                sendDocument.setDocument(new InputFile(pdfFile));
+                sendDocument.setCaption("Your blood pressure measurements report");
+
+                try {
+                    execute(sendDocument);
+                } catch (TelegramApiException e) {
+                    e.printStackTrace();
+                }
+                userStates.remove(update.getMessage().getChatId());
+                pendingDate.remove(update.getMessage().getChatId());
+
+            }
+            else {
                 if (userStates.containsKey(chatId) && "AWAITING_PRESSURE".equals(userStates.get(chatId))) {
                     handleHealthCheckInput(chatId, message);
                 } else {
@@ -116,12 +156,12 @@ public class TelegramBot extends TelegramLongPollingBot {
                         case "/start":
                             startCommandReceived(chatId, update.getMessage().getChat().getFirstName());
                             break;
-                        case "Start Health Checking":
+                        case "\uD83D\uDC49 Start Health Checking":
                             log.info("/startHeadlthChecking is pressed with chatId {}", chatId);
                             startHealthChecking(chatId);
                             break;
                         case "/audioBloodPressure":
-                        case "Audio Blood Pressure":
+                        case "\uD83D\uDC49 Audio Blood Pressure":
                             log.info("/audioBloodPressure is pressed with chatId {}", chatId);
                             sendMessageAnswer(update.getMessage().getChatId(), "Please send an audio message with your blood pressure measurement.");
                             break;
@@ -129,17 +169,22 @@ public class TelegramBot extends TelegramLongPollingBot {
                         case "register":
                             startRegistration(chatId);
                             break;
-                        case "Check your BMI":
+                        case "\uD83D\uDC49 Check your BMI":
                             log.info("/checkBMI is pressed with chatId {}", chatId);
                             checkMyIBF(chatId);
                             break;
-                        case "Show Graphic":
+                        case "\uD83D\uDC49 Show Graphic":
                             log.info("/showGraphic is pressed with chatId {}", chatId);
                             handleShowGraphicCommand(chatId);
                             break;
-                        case "My measurements":
+                        case "\uD83D\uDC49 My measurements":
                             log.info("/mymeasurements is pressed with chatId {}", chatId);
                             getMyPastMeasurements(chatId);
+                            break;
+                        case "\uD83D\uDC49 Download PDF":
+                            log.info("/downloadPDF is pressed with chatId {}", chatId);
+                            sendMessageAnswer(chatId, "Please enter the start date in the format yyyy-MM-dd:");
+                            userStates.put(chatId, "AWAITING_START_DATE");
                             break;
                         default:
                             handleDefaultMessage(chatId, message);
@@ -165,6 +210,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                     pendingBloodPressure.remove(chatId);
                 }
             }
+
         }
 
     private void saveBloodPressureMeasurement(long chatId, String bloodPressure) {
@@ -183,11 +229,11 @@ public class TelegramBot extends TelegramLongPollingBot {
             user.get().getBloodPressureMeasurements().add(bloodPressureMeasurement);
             userRepository.save(user.get());
             log.info("bloodPressure is saved with chatId {}", chatId);
-            String result = "Your blood pressure was successfully saved . \nYour ";
+            String result = "✅ Your blood pressure was successfully saved.\n Your";
 
             sendMessageWithCommands(chatId,getBloodMeasurementsResults(bloodPressureMeasurement.getSystolic(), bloodPressureMeasurement.getDiastolic(), user.get(),result) );
         } else {
-            sendMessageAnswer(chatId, "Could not recognise, please try again,Please send an audio message with your blood pressure measurement. (e.g 120 by 80)");
+            sendMessageAnswer(chatId, "❌ Could not recognise, please try again. Please send an audio message with your blood pressure measurement. (e.g., 120 by 80)");
 
         }
 
@@ -229,7 +275,7 @@ public class TelegramBot extends TelegramLongPollingBot {
                 if (!recognizedText.isEmpty()) {
                     SendMessage message1 = new SendMessage();
                     message1.setChatId(String.valueOf(chatId));
-                    String resultMessage = String.format("Did I recognize your blood pressure correctly as %s?", recognizedText);
+                    String resultMessage = String.format("\uD83C\uDF99\uFE0F Did I recognize your blood pressure correctly as %s?", recognizedText);
                     message1.setText(resultMessage);
                     InlineKeyboardMarkup markupInline = new InlineKeyboardMarkup();
                     List<List<InlineKeyboardButton>> rowsInline = new ArrayList<>();
@@ -406,11 +452,134 @@ public class TelegramBot extends TelegramLongPollingBot {
         }
     }
 
+    private File generatePDF(long chatId, LocalDateTime startDate, LocalDateTime endDate) {
+        File outputFile = new File("BloodPressureMeasurements_" + chatId + ".pdf");
+
+        Optional<User> userOptional = userRepository.findByChatId(chatId);
+        if (userOptional.isPresent()) {
+            User user = userOptional.get();
+            List<BloodPressureMeasurement> measurements = bloodMeasurementRepository.findByUserAndMeasurementTimeBetween(user, startDate, endDate);
+            if (!measurements.isEmpty()) {
+                try (PdfWriter writer = new PdfWriter(outputFile);
+                     PdfDocument pdf = new PdfDocument(writer);
+                     Document document = new Document(pdf, PageSize.A4)) {
+
+                    PdfFont font = PdfFontFactory.createFont(StandardFonts.HELVETICA);
+                    document.add(new Paragraph("User Information")
+                            .setFont(font)
+                            .setFontSize(14)
+                            .setBold());
+
+                    document.add(new Paragraph("Name: " + user.getFirstName() + " " + user.getLastName())
+                            .setFont(font)
+                            .setFontSize(12));
+
+                    document.add(new Paragraph("Age: " + user.getAge())
+                            .setFont(font)
+                            .setFontSize(12));
+
+                    document.add(new Paragraph("\nBlood Pressure Measurements")
+                            .setFont(font)
+                            .setFontSize(14)
+                            .setBold());
+                    double avgDiastolic = measurements.stream().mapToInt(BloodPressureMeasurement::getDiastolic).average().orElse(0);
+                    double avgSystolic = measurements.stream().mapToInt(BloodPressureMeasurement::getSystolic).average().orElse(0);
+                    int maxSystolic = measurements.stream().mapToInt(BloodPressureMeasurement::getSystolic).max().orElse(0);
+                    int minSystolic = measurements.stream().mapToInt(BloodPressureMeasurement::getSystolic).min().orElse(0);
+                    int maxDiastolic = measurements.stream().mapToInt(BloodPressureMeasurement::getDiastolic).max().orElse(0);
+                    int minDiastolic = measurements.stream().mapToInt(BloodPressureMeasurement::getDiastolic).min().orElse(0);
+                    document.add(new Paragraph("\nAvergae blood measurement from : " + startDate + " to " + endDate)
+                            .setFont(font)
+                            .setFontSize(14)
+                            .setBold());
+                    String messageText = String.format(
+                            "Here are your  blood pressure stats:\n" +
+                                    "Average Systolic: %.2f\n" +
+                                    "Average Diastolic: %.2f\n" +
+                                    "Max Systolic: %d\n" +
+                                    "Min Systolic: %d\n" +
+                                    "Difference (Systolic): %d\n" +
+                                    "Max Diastolic: %d\n" +
+                                    "Min Diastolic: %d\n" +
+                                    "Difference (Diastolic): %d",
+                            avgSystolic, avgDiastolic, maxSystolic, minSystolic, (maxSystolic - minSystolic), maxDiastolic, minDiastolic, (maxDiastolic - minDiastolic)
+                    );
+                    document.add(new Paragraph(messageText)
+                            .setFont(font)
+                            .setFontSize(14)
+                            .setBold());
+
+
+                    Table table = new Table(3);
+
+                    // Add table headers
+                    table.addCell(createCell("Date", font, true));
+                    table.addCell(createCell("Systolic", font, true));
+                    table.addCell(createCell("Diastolic", font, true));
+
+                    // Add table rows
+                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm");
+                    for (BloodPressureMeasurement measurement : measurements) {
+                        table.addCell(createCell(measurement.getMeasurementTime().format(formatter), font, false));
+                        table.addCell(createCell(String.valueOf(measurement.getSystolic()), font, false));
+                        table.addCell(createCell(String.valueOf(measurement.getDiastolic()), font, false));
+                    }
+
+                    document.add(table);
+
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            } else {
+                try (PdfWriter writer = new PdfWriter(outputFile);
+                     PdfDocument pdf = new PdfDocument(writer);
+                     Document document = new Document(pdf, PageSize.A4)) {
+
+                    PdfFont font = PdfFontFactory.createFont(StandardFonts.HELVETICA);
+                    document.add(new Paragraph("User Information")
+                            .setFont(font)
+                            .setFontSize(14)
+                            .setBold());
+
+                    document.add(new Paragraph("Name: " + user.getFirstName() + " " + user.getLastName())
+                            .setFont(font)
+                            .setFontSize(12));
+
+                    document.add(new Paragraph("Age: " + user.getAge())
+                            .setFont(font)
+                            .setFontSize(12));
+
+                    document.add(new Paragraph("\nBlood Pressure Measurements")
+                            .setFont(font)
+                            .setFontSize(14)
+                            .setBold());
+
+
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+
+            }
+        }
+        return outputFile;
+    }
+
+    private Cell createCell(String content, PdfFont font, boolean isHeader) {
+        Cell cell = new Cell();
+        Paragraph paragraph = new Paragraph(content).setFont(font);
+        if (isHeader) {
+            paragraph.setBold().setBackgroundColor(new DeviceRgb(200, 200, 200));
+        }
+        cell.add(paragraph);
+        cell.setTextAlignment(TextAlignment.CENTER).setVerticalAlignment(VerticalAlignment.MIDDLE);
+        return cell;
+    }
+
     private void checkMyIBF(long chatId) {
         Optional<User> userOptional = userRepository.findByChatId(chatId);
         if (isUserRegistered(chatId)) {
             log.info("checkMyIBF");
-            sendMessageAnswer(chatId, "Please enter your weight in kilograms (kg):");
+            sendMessageAnswer(chatId, "⚖\uFE0F Please enter your weight in kilograms (kg):");
             userStates.put(chatId, "AWAITING_WEIGHT");
         } else {
             sendMessageAnswer(chatId, "Oops! You need to register first. Please use the /register command.");
@@ -422,9 +591,9 @@ public class TelegramBot extends TelegramLongPollingBot {
             double weight = Double.parseDouble(message);
             userStates.put(chatId, "AWAITING_HEIGHT");
             weightCheck.put(chatId, weight);
-            sendMessageAnswer(chatId, "Thank you! Now, please enter your height in meters (e.g. , 1.80 ).");
+            sendMessageAnswer(chatId, "\uD83C\uDFE5 Thank you! Now, please enter your height in meters (e.g. , 1.80 ).");
         } catch (NumberFormatException e) {
-            sendMessageAnswer(chatId, "Invalid format. Please enter your weight in kilograms (e.g., 70.5 ).");
+            sendMessageAnswer(chatId, "❌ Invalid format. Please enter your weight in kilograms (e.g., 70.5 ).");
         }
     }
 
@@ -435,7 +604,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             double bmi = calculateBMI(weight, height);
             userStates.remove(chatId);
 
-            String resultMessage = "Your BMI is " + String.format("%.2f", bmi) + ". ";
+            String resultMessage = "\uD83D\uDCCA Your BMI is " + String.format("%.2f", bmi) + ". ";
 
             if (bmi < 18.5) {
                 resultMessage += "You are underweight.";
@@ -449,7 +618,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
             sendMessageWithCommands(chatId, resultMessage);
         } catch (NumberFormatException e) {
-            sendMessageAnswer(chatId, "Invalid format. Please enter your height in meters (e.g., 1.75).");
+            sendMessageAnswer(chatId, "❌ Invalid format. Please enter your height in meters (e.g., 1.75).");
         }
     }
 
@@ -479,27 +648,27 @@ public class TelegramBot extends TelegramLongPollingBot {
                 sendMessageWithCommands(chatId, resultMessage);
 
             } catch (NumberFormatException e) {
-                sendMessageAnswer(chatId, "Invalid format. Please enter the values in the format: Systolic Diastolic (e.g., 120/80).");
+                sendMessageAnswer(chatId, "❌ Invalid format. Please enter the values in the format: Systolic Diastolic (e.g., 120/80).");
             }
         } else {
-            sendMessageAnswer(chatId, "Invalid format. Please enter the values in the format: Systolic Diastolic (e.g., 120/80).");
+            sendMessageAnswer(chatId, "❌ Invalid format. Please enter the values in the format: Systolic Diastolic (e.g., 120/80).");
         }
     }
 
     private String getBloodMeasurementsResults(int systolic, int diastolic, User user, String resultMessage) {
 
         if (systolic < 90 || diastolic < 60) {
-            resultMessage = "Blood pressure is low (Hypotension).";
+            resultMessage = "⚠\uFE0F Blood pressure is low .";
         } else if ((systolic >= 90 && systolic <= 120) && (diastolic >= 60 && diastolic <= 80)) {
-            resultMessage = "Blood pressure is normal.";
+            resultMessage = "✔\uFE0F Blood pressure is normal.";
         } else if ((systolic > 120 && systolic <= 129) &&( diastolic < 85) ){
             resultMessage = "Blood pressure is elevated.";
         } else if ((systolic >= 130 && systolic <= 139) || (diastolic >= 80 && diastolic <= 89) ){
-            resultMessage = "Blood pressure is high . You should take your medication: " + user.getMedication() + " , According to WHO standart you have (Hypertension Stage 1)";
+            resultMessage = "Blood pressure is increased . Contact your doctor ! ";
         } else if (systolic >= 140 || diastolic >= 90) {
-            resultMessage = "Blood pressure is very high . You should take your medication: " + user.getMedication() + " , According to WHO standart you have (Hypertension Stage 2)";
+            resultMessage = "Blood pressure is increased . Contact your doctor ! ";
         } else if (systolic > 180 || diastolic > 120) {
-            resultMessage = "Blood pressure is in hypertensive crisis. Seek emergency care immediately!";
+            resultMessage = "Blood pressure  hypertensive crisis. Seek emergency care immediately!";
         }
 
         return resultMessage;
@@ -517,7 +686,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             }
             userTokens.remove(chatId);
         } else {
-            sendMessageAnswer(chatId, "Sorry, command is not recognized. 🤔");
+            sendMessageAnswer(chatId, "⛔ Sorry, command was not recognized.");
         }
     }
 
@@ -529,7 +698,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         User user = new User();
         user.setChatId(chatId);
         pendingUsers.put(chatId, user);
-        sendMessageAnswer(chatId, "Welcome! Let's get you registered. Please enter your first name:");
+        sendMessageAnswer(chatId, "\uD83D\uDCDD Welcome! Let's get you registered. Please enter your first name: ");
     }
 
     private void handlePendingUserRegistration(long chatId, String message, org.telegram.telegrambots.meta.api.objects.User from) {
@@ -537,10 +706,10 @@ public class TelegramBot extends TelegramLongPollingBot {
         User user = pendingUsers.get(chatId);
         if (user.getFirstName() == null) {
             user.setFirstName(message);
-            sendMessageAnswer(chatId, "Please enter your last name:");
+            sendMessageAnswer(chatId,  " \uD83D\uDCDD Please enter your last name:");
         } else if (user.getLastName() == null) {
             user.setLastName(message);
-            sendMessageAnswer(chatId, "Please enter your email:");
+            sendMessageAnswer(chatId, "\uD83D\uDC68\u200D\uD83D\uDCBB Please enter your email:");
         } else if (user.getEmail() == null) {
             user.setEmail(message);
             sendMessageAnswer(chatId, "Please enter age:");
@@ -560,7 +729,7 @@ public class TelegramBot extends TelegramLongPollingBot {
             user.setUsername(from.getUserName());
             userRepository.save(user);
             pendingUsers.remove(chatId);
-            String message1 = "Registration complete! You can now use the bot ";
+            String message1 = "✅ Registration complete! You can now use the bot ";
             sendMessageWithCommands(chatId, message1);
         }
     }
@@ -597,7 +766,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         log.info("/start command is pressed with chatId {}", chatId);
         String botUsername = getBotUsername();
         String answer = "Hi, " + firstName + "! My name is " + botUsername + ".\n\n" +
-                "Here are the commands you can use:";
+                "\uD83D\uDCCB Here are some commands to get started: ";
         sendMessageWithCommands(chatId, answer);
     }
 
@@ -612,17 +781,18 @@ public class TelegramBot extends TelegramLongPollingBot {
 
         // First row
         KeyboardRow row = new KeyboardRow();
-        row.add(new KeyboardButton("Start Health Checking"));
-        row.add(new KeyboardButton("My measurements"));
+        row.add(new KeyboardButton("\uD83D\uDC49 Start Health Checking"));
+        row.add(new KeyboardButton("\uD83D\uDC49 My measurements"));
         keyboard.add(row);
         row = new KeyboardRow();
-        row.add(new KeyboardButton("Check your BMI"));
+        row.add(new KeyboardButton("\uD83D\uDC49 Check your BMI"));
+        row.add(new KeyboardButton("\uD83D\uDC49 Download PDF"));
         keyboard.add(row);
 
         // Second row
         row = new KeyboardRow();
-        row.add(new KeyboardButton("Show Graphic"));
-        row.add(new KeyboardButton("Audio Blood Pressure"));
+        row.add(new KeyboardButton("\uD83D\uDC49 Show Graphic"));
+        row.add(new KeyboardButton("\uD83D\uDC49 Audio Blood Pressure"));
         keyboard.add(row);
 
         keyboardMarkup.setKeyboard(keyboard);

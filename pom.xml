@@ -22,7 +22,13 @@
 			<artifactId>jfreechart</artifactId>
 			<version>1.5.3</version>
 		</dependency>
-		<!-- https://mvnrepository.com/artifact/com.google.cloud/google-cloud-speech -->
+		<dependency>
+			<groupId>com.itextpdf</groupId>
+			<artifactId>itext7-core</artifactId>
+			<version>8.0.4</version>
+			<type>pom</type>
+		</dependency>
+
 		<dependency>
 			<groupId>com.google.cloud</groupId>
 			<artifactId>google-cloud-speech</artifactId>
